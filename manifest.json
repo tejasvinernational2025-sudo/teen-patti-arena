@@ -1,0 +1,16 @@
+{
+  "name": "Teen Patti Arena",
+  "short_name": "TP Arena",
+  "description": "Teen Patti Arena online multiplayer card game with virtual chips.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": [
+    "fullscreen",
+    "standalone"
+  ],
+  "orientation": "any",
+  "background_color": "#070307",
+  "theme_color": "#190816",
+  "icons": []
+}

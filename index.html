@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<meta name="theme-color" content="#190816" />
+<title>Teen Patti Arena</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="stylesheet" href="styles.css" />
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+<div class="app-shell">
+  <section id="homeScreen" class="screen active">
+    <header class="lobby-header">
+      <div class="brand-lockup">
+        <div class="brand-mark"><span>♠</span><i>♦</i></div>
+        <div><b>TEEN PATTI</b><strong>ARENA</strong></div>
+      </div>
+      <div class="header-actions">
+        <button class="round-btn" id="soundBtn" aria-label="sound">♫</button>
+        <button class="wallet-pill" id="walletBtn"><span class="coin">₹</span><b id="coinBalance">25,000</b><i>＋</i></button>
+      </div>
+    </header>
+
+    <main class="lobby-main">
+      <section class="hero-banner">
+        <div class="spark s1"></div><div class="spark s2"></div><div class="spark s3"></div>
+        <div class="hero-copy">
+          <span class="live-pill"><i></i> LIVE TABLES</span>
+          <h1>THE TABLE<br><em>IS YOURS</em></h1>
+          <p>Classic Teen Patti • Fast rounds • Virtual chips</p>
+          <button class="cta-gold" id="playNowBtn"><span>PLAY NOW</span><b>›</b></button>
+        </div>
+        <div class="hero-cards" aria-hidden="true">
+          <div class="hero-card c1"><span>A</span><i>♠</i></div>
+          <div class="hero-card c2 red"><span>K</span><i>♥</i></div>
+          <div class="hero-card c3 red"><span>Q</span><i>♦</i></div>
+          <div class="chip-stack"><i></i><i></i><i></i></div>
+        </div>
+      </section>
+
+      <section class="quick-row">
+        <button class="quick-card daily" id="claimBonusBtn">
+          <span class="quick-icon">🎁</span><span><small>DAILY BONUS</small><b id="bonusText">+5,000 CHIPS</b></span><i>CLAIM</i>
+        </button>
+        <button class="quick-card private" id="privateBtn">
+          <span class="quick-icon">🔐</span><span><small>FRIENDS</small><b>PRIVATE TABLE</b></span><i>CREATE</i>
+        </button>
+      </section>
+
+      <div class="section-title"><div><small>CHOOSE YOUR STAKES</small><h2>Classic Rooms</h2></div><span>5 players / table</span></div>
+
+      <section class="room-grid">
+        <button class="room-card rookie" data-boot="100" data-room="Rookie Club">
+          <div class="room-top"><span class="room-badge">ROOKIE</span><span class="players"><i></i> 2.4K</span></div>
+          <div class="room-art"><span>♣</span><i>100</i></div>
+          <div class="room-bottom"><div><small>BOOT</small><b>100</b></div><strong>PLAY <span>›</span></strong></div>
+        </button>
+        <button class="room-card royal" data-boot="500" data-room="Royal Club">
+          <div class="room-top"><span class="room-badge">POPULAR</span><span class="players"><i></i> 4.8K</span></div>
+          <div class="room-art"><span>♛</span><i>500</i></div>
+          <div class="room-bottom"><div><small>BOOT</small><b>500</b></div><strong>PLAY <span>›</span></strong></div>
+        </button>
+        <button class="room-card elite" data-boot="1000" data-room="Elite Club">
+          <div class="room-top"><span class="room-badge">HIGH ROLLER</span><span class="players"><i></i> 1.1K</span></div>
+          <div class="room-art"><span>♠</span><i>1K</i></div>
+          <div class="room-bottom"><div><small>BOOT</small><b>1,000</b></div><strong>PLAY <span>›</span></strong></div>
+        </button>
+      </section>
+
+      <section class="mode-strip">
+        <div class="mode-head"><small>MORE MODES</small><span>Coming next</span></div>
+        <div class="mode-pills"><button data-coming="Muflis">Muflis</button><button data-coming="AK47">AK47</button><button data-coming="Hukam">Hukam</button><button data-coming="Royal">Royal</button></div>
+      </section>
+      <p class="legal-note">For entertainment only. Virtual chips have no cash value and cannot be withdrawn.</p>
+    </main>
+  </section>
+
+  <section id="tableScreen" class="screen table-screen">
+    <header class="table-header">
+      <button class="round-btn back" id="backBtn">‹</button>
+      <div class="table-room"><small>CLASSIC • 5 PLAYERS</small><b id="roomTitle">Rookie Club</b></div>
+      <button class="wallet-pill compact"><span class="coin">₹</span><b id="tableBalance">25,000</b></button>
+    </header>
+
+    <main class="table-stage">
+      <div class="table-statusbar"><span>BOOT <b id="bootValue">100</b></span><div class="pot-display"><small>TOTAL POT</small><b><i>●</i> <span id="potValue">0</span></b></div><span>ROUND <b id="roundNo">1</b></span></div>
+
+      <div class="casino-table">
+        <div class="felt-pattern"></div>
+        <div class="seat seat-1" id="bot1">
+          <div class="avatar-wrap"><div class="avatar av1">R</div><span class="online"></span></div>
+          <b class="pname">Riya</b><small class="pcoins" data-coins>10,000</small>
+          <div class="mini-cards"><i></i><i></i><i></i></div><span class="status" data-status>READY</span>
+        </div>
+        <div class="seat seat-2" id="bot2">
+          <div class="avatar-wrap"><div class="avatar av2">A</div><span class="online"></span></div>
+          <b class="pname">Aman</b><small class="pcoins" data-coins>10,000</small>
+          <div class="mini-cards"><i></i><i></i><i></i></div><span class="status" data-status>READY</span>
+        </div>
+        <div class="seat seat-3" id="bot3">
+          <div class="avatar-wrap"><div class="avatar av3">K</div><span class="online"></span></div>
+          <b class="pname">Kabir</b><small class="pcoins" data-coins>10,000</small>
+          <div class="mini-cards"><i></i><i></i><i></i></div><span class="status" data-status>READY</span>
+        </div>
+        <div class="seat seat-4" id="bot4">
+          <div class="avatar-wrap"><div class="avatar av4">M</div><span class="online"></span></div>
+          <b class="pname">Meera</b><small class="pcoins" data-coins>10,000</small>
+          <div class="mini-cards"><i></i><i></i><i></i></div><span class="status" data-status>READY</span>
+        </div>
+
+        <div class="dealer-zone"><div class="dealer-chip">D</div><div id="roundLabel">Ready to deal</div></div>
+
+        <div class="seat seat-me" id="me">
+          <div class="avatar-wrap hero-avatar"><div class="avatar avme">YOU</div><span class="online"></span></div>
+          <b class="pname">You</b><small class="pcoins" id="myTableCoins">25,000</small>
+          <span class="status my-status" id="myStatus">READY</span>
+        </div>
+
+        <div class="my-hand" id="myCards">
+          <div class="playing-card back"></div><div class="playing-card back"></div><div class="playing-card back"></div>
+        </div>
+      </div>
+
+      <div class="ticker" id="gameLog"><span>♦</span> Choose DEAL to start the round.</div>
+
+      <div class="controls">
+        <button class="deal-btn" id="dealBtn"><span>DEAL CARDS</span><small>BOOT <b id="dealBoot">100</b></small></button>
+        <div class="action-bar hidden" id="actionBar">
+          <button class="action pack" id="packBtn"><span>✕</span><b>PACK</b></button>
+          <button class="action seen" id="seenBtn"><span>◉</span><b>SEEN</b></button>
+          <button class="action chaal" id="chaalBtn"><span>●</span><b>CHAAL</b><small id="chaalAmount">100</small></button>
+          <button class="action show" id="showBtn"><span>♛</span><b>SHOW</b></button>
+        </div>
+      </div>
+    </main>
+  </section>
+
+  <nav class="bottom-nav" id="bottomNav">
+    <button class="active" id="navHome"><span>⌂</span><b>Home</b></button>
+    <button id="navTables"><span>♠</span><b>Tables</b></button>
+    <button class="center-nav" id="navPlay"><i>▶</i></button>
+    <button id="navWallet"><span>◆</span><b>Wallet</b></button>
+    <button id="navProfile"><span>●</span><b>Profile</b></button>
+  </nav>
+
+  <div class="modal hidden" id="infoModal"><div class="modal-card"><button class="modal-x" id="modalX">×</button><div class="modal-crown">♛</div><h3 id="modalTitle">Teen Patti Arena</h3><p id="modalBody"></p><button class="modal-ok" id="closeModal">GOT IT</button></div></div>
+</div>
+<script src="app.js"></script>
+<script src="auth.js"></script>
+<script src="rooms.js"></script>
+</body>
+</html>
