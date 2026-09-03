@@ -2552,6 +2552,15 @@
       .arena-table-line{display:flex;justify-content:space-between;gap:6px;margin-top:7px;font-size:9px;opacity:.86}
       .arena-table-join{width:100%;margin-top:9px;border:0;border-radius:10px;padding:8px 6px;font-size:10px;font-weight:1000;background:linear-gradient(135deg,#ffd35b,#b98619);color:#281800}
       .arena-status-playing{color:#76e8ff}.arena-status-waiting{color:#9cffb2}.arena-status-full{color:#ff9d9d}
+      .arena-quick-row{display:grid;grid-template-columns:1fr auto;gap:7px;margin:0 0 8px}
+      .arena-search-row{display:grid;grid-template-columns:1fr auto;gap:7px;margin:0 0 10px}
+      .arena-table-search{min-width:0;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#fff;border-radius:12px;padding:10px 11px;font-size:10px;outline:none}
+      .arena-table-search::placeholder{color:rgba(255,255,255,.48)}
+      .arena-search-clear{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.07);color:#fff;border-radius:12px;padding:10px 12px;font-weight:1000;font-size:10px}
+      .arena-quick-join,.arena-refresh{border:0;border-radius:12px;padding:10px 12px;font-weight:1000;font-size:10px}
+      .arena-quick-join{background:linear-gradient(135deg,#8fffc1,#3fcf8e);color:#062619}
+      .arena-refresh{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.12)}
+      .arena-hot{display:inline-block;margin-left:5px;padding:2px 5px;border-radius:99px;background:rgba(143,255,193,.14);color:#8fffc1;font-size:7px;font-weight:1000;vertical-align:1px}
       @media(max-width:360px){.arena-table-grid{grid-template-columns:1fr}}
     `;
     document.head.appendChild(style);
@@ -2607,6 +2616,40 @@
     }, Number(d.seat_no || 1));
   }
 
+
+  async function quickJoinArenaTable(gameMode = 'classic', tier = null) {
+    const mode = String(gameMode || 'classic').toLowerCase();
+    if (mode === 'sitgo') return openSitGoLobby();
+
+    const overlay = $q('#tpaMetaOverlay');
+    let data, error;
+    try {
+      const res = await db.rpc('quick_join_arena_table', {
+        p_game_mode: mode,
+        p_tier: tier ? String(tier).toUpperCase() : null
+      });
+      data = res.data;
+      error = res.error;
+    } catch (e) {
+      error = e;
+    }
+
+    if (error) return showError('Quick Join failed', error);
+    const d = Array.isArray(data) ? data[0] : data;
+    if (!d?.room_id) return showError('Quick Join failed', 'No room was returned.');
+
+    if (overlay) overlay.classList.add('hidden');
+    await enterOnlineRoom({
+      id:d.room_id,
+      room_code:d.room_code,
+      room_name:d.table_name || `${modeTitle(mode)} Table`,
+      boot_amount:Number(d.boot_amount || 100),
+      status:'waiting',
+      is_private:false,
+      game_mode:d.game_mode || mode
+    }, Number(d.seat_no || 1));
+  }
+
   async function openArenaTableLobby(gameMode = 'classic') {
     const mode = String(gameMode || 'classic').toLowerCase();
     if (mode === 'sitgo') return openSitGoLobby();
@@ -2616,45 +2659,95 @@
 
     let tables = [];
     let synced = true;
-    try {
-      const { data, error } = await db.rpc('get_arena_table_lobby', { p_game_mode:mode });
-      if (error) throw error;
-      const payload = data || {};
-      tables = Array.isArray(payload) ? payload : (payload.tables || []);
-    } catch (e) {
-      console.warn('V10 table catalog fallback:', e?.message || e);
-      synced = false;
-      tables = arenaFallbackTables(mode);
+    let activeTier = 'ROOKIE';
+    let searchText = '';
+    let refreshBusy = false;
+
+    async function loadTables(firstLoad = false) {
+      if (refreshBusy) return;
+      refreshBusy = true;
+      try {
+        const { data, error } = await db.rpc('get_arena_table_lobby', { p_game_mode:mode });
+        if (error) throw error;
+        const payload = data || {};
+        const next = Array.isArray(payload) ? payload : (payload.tables || []);
+        if (next.length) {
+          tables = next;
+          synced = true;
+          if (firstLoad) activeTier = String(tables[0]?.tier || 'ROOKIE').toUpperCase();
+        }
+      } catch (e) {
+        console.warn('V16 table catalog fallback:', e?.message || e);
+        if (!tables.length) tables = arenaFallbackTables(mode);
+        synced = false;
+        if (firstLoad) activeTier = String(tables[0]?.tier || 'ROOKIE').toUpperCase();
+      } finally {
+        refreshBusy = false;
+      }
     }
 
+    await loadTables(true);
     if (!tables.length) tables = arenaFallbackTables(mode);
-    let activeTier = String(tables[0]?.tier || 'ROOKIE').toUpperCase();
-    const tiers = [...new Set(tables.map(t => String(t.tier || 'ROOKIE').toUpperCase()))];
 
     const render = () => {
-      const filtered = tables.filter(t => String(t.tier || '').toUpperCase() === activeTier);
+      const tiers = [...new Set(tables.map(t => String(t.tier || 'ROOKIE').toUpperCase()))];
+      if (!tiers.includes(activeTier)) activeTier = tiers[0] || 'ROOKIE';
+
+      const tierTables = tables.filter(t => String(t.tier || '').toUpperCase() === activeTier);
+      const q = String(searchText || '').trim().toLowerCase().replace(/^#/, '');
+      const filtered = tierTables
+        .filter(t => {
+          if (!q) return true;
+          const no = String(Number(t.table_no || 0)).padStart(3,'0');
+          const rawNo = String(Number(t.table_no || 0));
+          const name = String(t.table_name || '').toLowerCase();
+          return no.includes(q) || rawNo === q || name.includes(q);
+        })
+        .slice()
+        .sort((a,b) => {
+          const ap = Number(a.players_count || 0), bp = Number(b.players_count || 0);
+          const aJoinable = String(a.table_status || '').toUpperCase() === 'WAITING' && ap > 0 && ap < Number(a.max_players || 5);
+          const bJoinable = String(b.table_status || '').toUpperCase() === 'WAITING' && bp > 0 && bp < Number(b.max_players || 5);
+          if (aJoinable !== bJoinable) return aJoinable ? -1 : 1;
+          if (bp !== ap) return bp - ap;
+          return Number(a.table_no || 0) - Number(b.table_no || 0);
+        });
+
+      const totalPlayers = tierTables.reduce((sum,t) => sum + Number(t.players_count || 0), 0);
       overlay.querySelector('#tpaMetaBody').innerHTML = `
         <div class="arena-net-summary">
           <b>${mode==='classic'?'3 PATTI • ':''}100 TABLES • ${modeTitle(mode).toUpperCase()}</b>
-          <span>${synced ? 'LIVE NETWORK' : 'READY • SQL SYNC PENDING'}<br>10 MODES • 1000 TABLES</span>
+          <span>${synced ? 'LIVE NETWORK' : 'READY • SQL SYNC PENDING'}<br>${activeTier} • ${totalPlayers} PLAYER${totalPlayers===1?'':'S'}</span>
         </div>
-        ${mode==='classic' ? `<div style="margin:-2px 0 10px;padding:9px 11px;border-radius:12px;background:rgba(255,255,255,.045);font-size:9px;line-height:1.45;opacity:.88"><b>CLASSIC 3 PATTI</b> • 3 cards • BLIND / SEEN / CHAAL / PACK / SHOW • Trail &gt; Pure Sequence &gt; Sequence &gt; Color &gt; Pair &gt; High Card</div>` : ''}
+        ${mode==='classic' ? `<div style="margin:-2px 0 10px;padding:9px 11px;border-radius:12px;background:rgba(255,255,255,.045);font-size:9px;line-height:1.45;opacity:.88"><b>CLASSIC 3 PATTI</b> • 3 cards • BLIND / SEEN / CHAAL / PACK / SHOW / SIDE SHOW • Trail &gt; Pure Sequence &gt; Sequence &gt; Color &gt; Pair &gt; High Card</div>` : ''}
         <div class="arena-tier-tabs">
           ${tiers.map(t => `<button class="arena-tier-tab ${t===activeTier?'active':''}" data-arena-tier="${esc(t)}">${esc(t)}</button>`).join('')}
         </div>
+        <div class="arena-quick-row">
+          <button class="arena-quick-join" data-arena-quick>⚡ QUICK JOIN • ${esc(activeTier)}</button>
+          <button class="arena-refresh" data-arena-refresh>↻ REFRESH</button>
+        </div>
+        <div class="arena-search-row">
+          <input class="arena-table-search" data-arena-search inputmode="numeric" placeholder="Find table #001…" value="${esc(searchText)}">
+          <button class="arena-search-clear" data-arena-clear>${searchText ? 'CLEAR' : `${filtered.length}/${tierTables.length}`}</button>
+        </div>
         <div class="arena-table-grid">
-          ${filtered.map((t,idx) => {
+          ${filtered.length ? '' : `<div style="grid-column:1/-1;padding:18px 12px;text-align:center;border:1px dashed rgba(255,255,255,.14);border-radius:14px;font-size:10px;opacity:.7">No table found in ${esc(activeTier)}. Try another number or CLEAR.</div>`}
+          ${filtered.map((t) => {
             const status = String(t.table_status || 'OPEN').toUpperCase();
+            const players = Number(t.players_count || 0);
+            const maxPlayers = Number(t.max_players || 5);
+            const hot = status === 'WAITING' && players >= 2 && players < maxPlayers;
             const cls = status === 'PLAYING' ? 'arena-status-playing' : status === 'FULL' ? 'arena-status-full' : 'arena-status-waiting';
             return `<div class="arena-table-card">
               <div class="arena-table-top">
-                <div><b>${esc(t.table_name || `${modeTitle(mode)} Table #${String(t.table_no||0).padStart(3,'0')}`)}</b><br><small>TABLE ${String(Number(t.table_no||0)).padStart(3,'0')}</small></div>
+                <div><b>${esc(t.table_name || `${modeTitle(mode)} Table #${String(t.table_no||0).padStart(3,'0')}`)}${hot?'<span class="arena-hot">FILLING</span>':''}</b><br><small>TABLE ${String(Number(t.table_no||0)).padStart(3,'0')}</small></div>
                 <span class="arena-table-tier">${esc(String(t.tier||'').toUpperCase())}</span>
               </div>
               <div class="arena-table-line"><span>Boot</span><b>${Number(t.boot_amount||0).toLocaleString()} chips</b></div>
-              <div class="arena-table-line"><span>Players</span><b>${Number(t.players_count||0)}/${Number(t.max_players||5)}</b></div>
+              <div class="arena-table-line"><span>Players</span><b>${players}/${maxPlayers}</b></div>
               <div class="arena-table-line"><span>Status</span><b class="${cls}">${esc(status)}</b></div>
-              <button class="arena-table-join" data-arena-index="${tables.indexOf(t)}">JOIN TABLE</button>
+              <button class="arena-table-join" data-arena-id="${Number(t.id || 0)}">JOIN TABLE</button>
             </div>`;
           }).join('')}
         </div>`;
@@ -2662,12 +2755,46 @@
       overlay.querySelectorAll('[data-arena-tier]').forEach(btn => {
         btn.onclick = () => { activeTier = btn.dataset.arenaTier; render(); };
       });
-      overlay.querySelectorAll('[data-arena-index]').forEach(btn => {
-        btn.onclick = () => joinArenaCatalogTable(tables[Number(btn.dataset.arenaIndex)]);
+
+      overlay.querySelector('[data-arena-quick]')?.addEventListener('click', () => quickJoinArenaTable(mode, activeTier));
+      overlay.querySelector('[data-arena-refresh]')?.addEventListener('click', async () => {
+        await loadTables(false);
+        render();
+      });
+
+      const searchInput = overlay.querySelector('[data-arena-search]');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          searchText = String(e.target.value || '');
+          render();
+          const nextInput = overlay.querySelector('[data-arena-search]');
+          nextInput?.focus();
+          try { nextInput?.setSelectionRange(searchText.length, searchText.length); } catch (_) {}
+        });
+      }
+      overlay.querySelector('[data-arena-clear]')?.addEventListener('click', () => {
+        searchText = '';
+        render();
+      });
+
+      overlay.querySelectorAll('[data-arena-id]').forEach(btn => {
+        const table = tables.find(t => Number(t.id || 0) === Number(btn.dataset.arenaId));
+        btn.onclick = () => joinArenaCatalogTable(table);
       });
     };
 
     render();
+
+    // Keep counts fresh only while this lobby is visible. One mode = 100 cards,
+    // so we refresh modestly instead of hammering the backend.
+    const liveTimer = setInterval(async () => {
+      if (overlay.classList.contains('hidden') || !document.body.contains(overlay)) {
+        clearInterval(liveTimer);
+        return;
+      }
+      await loadTables(false);
+      render();
+    }, 10000);
   }
 
   function wireHomeButtons() {
