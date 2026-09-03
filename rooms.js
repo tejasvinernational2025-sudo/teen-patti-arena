@@ -118,6 +118,7 @@
   };
   window.TPAOnline = online;
   window.TPAReconnect = () => reconnectExistingRoom();
+  window.TPAOpenTables = (mode='classic') => openArenaTableLobby(mode);
 
   const $q = q => document.querySelector(q);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -2247,6 +2248,164 @@
     online.sitgoState = null;
   }
 
+
+  // =============================================================
+  // V10.0 — 1000 TABLE NETWORK
+  // 10 modes x 100 logical tables. Physical rooms are created lazily.
+  // =============================================================
+  const ARENA_TABLE_TIERS = ['ROOKIE','REGULAR','PRO','HIGH','VIP'];
+
+  function arenaFallbackBoot(mode, tableNo) {
+    const band = Math.min(4, Math.floor((Math.max(1, Number(tableNo || 1)) - 1) / 20));
+    if (mode === '4xboot') return [400,1000,2000,4000,10000][band];
+    if (mode === '6patti') return [500,1250,2500,5000,12500][band];
+    if (mode === 'sitgo') return 500;
+    return [100,250,500,1000,2500][band];
+  }
+
+  function arenaFallbackTables(mode) {
+    return Array.from({length:100}, (_,i) => {
+      const n = i + 1;
+      const band = Math.min(4, Math.floor(i / 20));
+      return {
+        id:null,
+        game_mode:mode,
+        table_no:n,
+        table_name:`${modeTitle(mode)} Table #${String(n).padStart(3,'0')}`,
+        tier: mode === 'sitgo' ? 'TOURNAMENT' : ARENA_TABLE_TIERS[band],
+        boot_amount:arenaFallbackBoot(mode,n),
+        players_count:0,
+        max_players:5,
+        table_status:'OPEN',
+        local_fallback:true
+      };
+    });
+  }
+
+  function ensureArenaLobbyStyles() {
+    if ($q('#arena1000LobbyStyle')) return;
+    const style = document.createElement('style');
+    style.id = 'arena1000LobbyStyle';
+    style.textContent = `
+      .arena-net-summary{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:10px 12px;margin:0 0 10px;border:1px solid rgba(255,215,95,.22);background:rgba(255,215,95,.07);border-radius:14px;font-size:11px}
+      .arena-net-summary b{font-size:13px}.arena-net-summary span{opacity:.72;text-align:right}
+      .arena-tier-tabs{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none}
+      .arena-tier-tabs::-webkit-scrollbar{display:none}
+      .arena-tier-tab{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#fff;border-radius:999px;padding:8px 11px;font-weight:900;font-size:10px;white-space:nowrap}
+      .arena-tier-tab.active{background:linear-gradient(135deg,#ffd35b,#b98619);color:#251400;border-color:rgba(255,224,122,.8)}
+      .arena-table-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+      .arena-table-card{padding:11px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.055);border-radius:14px;min-width:0}
+      .arena-table-top{display:flex;justify-content:space-between;gap:6px;align-items:flex-start}
+      .arena-table-top b{font-size:11px;line-height:1.2}.arena-table-top small{font-size:9px;opacity:.65}
+      .arena-table-tier{font-size:8px;font-weight:1000;border:1px solid rgba(255,211,91,.26);color:#ffd96b;padding:3px 6px;border-radius:99px;white-space:nowrap}
+      .arena-table-line{display:flex;justify-content:space-between;gap:6px;margin-top:7px;font-size:9px;opacity:.86}
+      .arena-table-join{width:100%;margin-top:9px;border:0;border-radius:10px;padding:8px 6px;font-size:10px;font-weight:1000;background:linear-gradient(135deg,#ffd35b,#b98619);color:#281800}
+      .arena-status-playing{color:#76e8ff}.arena-status-waiting{color:#9cffb2}.arena-status-full{color:#ff9d9d}
+      @media(max-width:360px){.arena-table-grid{grid-template-columns:1fr}}
+    `;
+    document.head.appendChild(style);
+  }
+
+  async function joinArenaCatalogTable(table) {
+    if (!table) return;
+    const mode = table.game_mode || 'classic';
+    if (mode === 'sitgo') return openSitGoLobby();
+
+    const boot = Number(table.boot_amount || 100);
+    if (await reconnectExistingRoom(mode, boot)) return;
+
+    // Safe fallback keeps V9 usable even before the V10 SQL migration is run.
+    if (!table.id || table.local_fallback) {
+      return findOrCreatePublicRoom(boot, table.table_name || `${modeTitle(mode)} Table`, mode);
+    }
+
+    const overlay = $q('#tpaMetaOverlay');
+    const { data, error } = await db.rpc('join_arena_table', { p_table_id:Number(table.id) });
+    if (error) {
+      const msg = String(error.message || '');
+      if (/join_arena_table|function.*does not exist|schema cache/i.test(msg)) {
+        return findOrCreatePublicRoom(boot, table.table_name || `${modeTitle(mode)} Table`, mode);
+      }
+      return showError('Table join failed', error);
+    }
+
+    const d = Array.isArray(data) ? data[0] : data;
+    if (!d?.room_id) return showError('Table join failed', 'No room was returned.');
+    if (overlay) overlay.classList.add('hidden');
+
+    await enterOnlineRoom({
+      id:d.room_id,
+      room_code:d.room_code,
+      room_name:d.table_name || table.table_name || `${modeTitle(mode)} Table`,
+      boot_amount:Number(d.boot_amount || boot),
+      status:'waiting',
+      is_private:false,
+      game_mode:d.game_mode || mode
+    }, Number(d.seat_no || 1));
+  }
+
+  async function openArenaTableLobby(gameMode = 'classic') {
+    const mode = String(gameMode || 'classic').toLowerCase();
+    if (mode === 'sitgo') return openSitGoLobby();
+
+    ensureArenaLobbyStyles();
+    const overlay = showMeta(`${modeTitle(mode)} • 100 Tables`, `<div class="tpa-sub">Loading table network…</div>`);
+
+    let tables = [];
+    let synced = true;
+    try {
+      const { data, error } = await db.rpc('get_arena_table_lobby', { p_game_mode:mode });
+      if (error) throw error;
+      const payload = data || {};
+      tables = Array.isArray(payload) ? payload : (payload.tables || []);
+    } catch (e) {
+      console.warn('V10 table catalog fallback:', e?.message || e);
+      synced = false;
+      tables = arenaFallbackTables(mode);
+    }
+
+    if (!tables.length) tables = arenaFallbackTables(mode);
+    let activeTier = String(tables[0]?.tier || 'ROOKIE').toUpperCase();
+    const tiers = [...new Set(tables.map(t => String(t.tier || 'ROOKIE').toUpperCase()))];
+
+    const render = () => {
+      const filtered = tables.filter(t => String(t.tier || '').toUpperCase() === activeTier);
+      overlay.querySelector('#tpaMetaBody').innerHTML = `
+        <div class="arena-net-summary">
+          <b>100 TABLES • ${modeTitle(mode).toUpperCase()}</b>
+          <span>${synced ? 'LIVE NETWORK' : 'READY • SQL SYNC PENDING'}<br>10 MODES • 1000 TABLES</span>
+        </div>
+        <div class="arena-tier-tabs">
+          ${tiers.map(t => `<button class="arena-tier-tab ${t===activeTier?'active':''}" data-arena-tier="${esc(t)}">${esc(t)}</button>`).join('')}
+        </div>
+        <div class="arena-table-grid">
+          ${filtered.map((t,idx) => {
+            const status = String(t.table_status || 'OPEN').toUpperCase();
+            const cls = status === 'PLAYING' ? 'arena-status-playing' : status === 'FULL' ? 'arena-status-full' : 'arena-status-waiting';
+            return `<div class="arena-table-card">
+              <div class="arena-table-top">
+                <div><b>${esc(t.table_name || `${modeTitle(mode)} Table #${String(t.table_no||0).padStart(3,'0')}`)}</b><br><small>TABLE ${String(Number(t.table_no||0)).padStart(3,'0')}</small></div>
+                <span class="arena-table-tier">${esc(String(t.tier||'').toUpperCase())}</span>
+              </div>
+              <div class="arena-table-line"><span>Boot</span><b>${Number(t.boot_amount||0).toLocaleString()} chips</b></div>
+              <div class="arena-table-line"><span>Players</span><b>${Number(t.players_count||0)}/${Number(t.max_players||5)}</b></div>
+              <div class="arena-table-line"><span>Status</span><b class="${cls}">${esc(status)}</b></div>
+              <button class="arena-table-join" data-arena-index="${tables.indexOf(t)}">JOIN TABLE</button>
+            </div>`;
+          }).join('')}
+        </div>`;
+
+      overlay.querySelectorAll('[data-arena-tier]').forEach(btn => {
+        btn.onclick = () => { activeTier = btn.dataset.arenaTier; render(); };
+      });
+      overlay.querySelectorAll('[data-arena-index]').forEach(btn => {
+        btn.onclick = () => joinArenaCatalogTable(tables[Number(btn.dataset.arenaIndex)]);
+      });
+    };
+
+    render();
+  }
+
   function wireHomeButtons() {
     wireMetaFeatures();
 
@@ -2262,7 +2421,7 @@
     });
 
     if ($q('#navTables')) $q('#navTables').onclick =
-      () => findOrCreatePublicRoom(100, 'Rookie Club', 'classic');
+      () => openArenaTableLobby('classic');
 
     if ($q('#navPlay')) $q('#navPlay').onclick =
       () => findOrCreatePublicRoom(100, 'Rookie Club', 'classic');
@@ -2279,7 +2438,8 @@
       ['4X Boot','4xboot','4X Boot Club',400],
       ['6 Patti','6patti','6 Patti Tournament',500],
       ['321','321','321 Tournament',100],
-      ['Classic','classic','Rookie Club',100]
+      ['Classic','classic','Rookie Club',100],
+      ['Sit & Go','sitgo','Sit & Go',500]
     ];
 
     if (modeWrap) {
@@ -2296,12 +2456,12 @@
         btn.textContent = label;
         btn.dataset.mode = mode;
         btn.removeAttribute('data-coming');
-        btn.onclick = () => findOrCreatePublicRoom(boot, room, mode);
+        btn.onclick = () => openArenaTableLobby(mode);
       });
     }
 
     const modeHead = $q('.mode-head span');
-    if (modeHead) modeHead.textContent = 'PLAY NOW';
+    if (modeHead) modeHead.textContent = '1000 TABLE NETWORK';
   }
 
   async function init() {
