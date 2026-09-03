@@ -171,7 +171,7 @@
       const tr = r.variant_data?.tournament_round || 1;
       return `321 • ROUND ${tr}/5 • SET 3-2-1`;
     }
-    return 'Classic';
+    return 'Classic 3 Patti';
   }
 
 
@@ -1763,7 +1763,9 @@
       ? `${modeName} • ${online.roomCode}`
       : `${modeName} • ${online.roomName}`;
     const subtitle = $q('#tableScreen .table-room small');
-    if (subtitle) subtitle.textContent = `${modeName.toUpperCase()} • 5 PLAYERS`;
+    if (subtitle) subtitle.textContent = online.mode === 'classic'
+      ? 'CLASSIC 3 PATTI • 5 PLAYERS • BLIND / SEEN / CHAAL / PACK / SHOW'
+      : `${modeName.toUpperCase()} • 5 PLAYERS`;
 
     if ($q('#bootValue')) $q('#bootValue').textContent = online.boot.toLocaleString();
     if ($q('#dealBoot')) $q('#dealBoot').textContent = online.boot.toLocaleString();
@@ -1772,6 +1774,7 @@
     await setPresence(true);
     await refreshAll();
     wireTableButtons();
+    ensureChangeTableButton();
     startTimerLoop();
 
     roomMessage(`Online table joined • Seat ${seatNo} • Room ${online.roomCode}`);
@@ -2189,6 +2192,48 @@
     await refreshAll();
   }
 
+  function ensureChangeTableButton() {
+    const host = $q('#tableScreen');
+    if (!host) return;
+
+    if (!$q('#tpaChangeTableStyle')) {
+      const style = document.createElement('style');
+      style.id = 'tpaChangeTableStyle';
+      style.textContent = `
+        #tpaChangeTableBtn{
+          position:absolute;right:14px;top:72px;z-index:80;
+          border:1px solid rgba(255,220,120,.48);border-radius:999px;
+          padding:8px 11px;background:rgba(20,12,30,.88);color:#ffe29a;
+          font-size:10px;font-weight:1000;letter-spacing:.4px;cursor:pointer;
+          box-shadow:0 6px 18px rgba(0,0,0,.22)
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    let btn = $q('#tpaChangeTableBtn');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'tpaChangeTableBtn';
+      btn.type = 'button';
+      btn.textContent = 'CHANGE TABLE';
+      host.style.position = host.style.position || 'relative';
+      host.appendChild(btn);
+    }
+
+    btn.onclick = async () => {
+      if (online.mode === 'sitgo') {
+        return modal('Tournament table', 'Sit & Go uses tournament leave/forfeit rules. Normal table switching is disabled here.');
+      }
+      const mode = online.mode || 'classic';
+      const ok = await leaveOnlineRoom({ force:true });
+      if (!ok) return;
+      if (typeof screen === 'function') screen('home');
+      await sleep(60);
+      openArenaTableLobby(mode);
+    };
+  }
+
   function wireTableButtons() {
     const deal = $q('#dealBtn');
     if (deal) deal.onclick = startRoundOnline;
@@ -2208,26 +2253,40 @@
 
     const back = $q('#backBtn');
     if (back) back.onclick = async () => {
-      const active = online.currentRound &&
-        ['dealing','playing','show'].includes(online.currentRound.status);
-      if (active) {
-        return modal('Round in progress', 'Finish or pack before leaving this online table.');
+      if (online.mode === 'sitgo') {
+        const active = online.currentRound &&
+          ['dealing','playing','show'].includes(online.currentRound.status);
+        if (active) return modal('Tournament in progress', 'Sit & Go uses tournament forfeit rules. Finish this tournament stage before leaving.');
       }
-      await leaveOnlineRoom();
+      const ok = await leaveOnlineRoom({ force: online.mode !== 'sitgo' });
+      if (!ok) return;
       if (typeof screen === 'function') screen('home');
     };
+
+    ensureChangeTableButton();
   }
 
-  async function leaveOnlineRoom() {
-    if (!online.roomId) return;
-
-    try {
-      await db.rpc('leave_game_room', { p_room_id: online.roomId });
-    } catch (e) {
-      console.warn(e);
-    }
+  async function leaveOnlineRoom(options = {}) {
+    if (!online.roomId) return true;
+    const force = !!options.force;
+    const leavingRoomId = online.roomId;
 
     await setPresence(false);
+
+    let leaveError = null;
+    try {
+      const res = await db.rpc(force ? 'leave_table_anytime' : 'leave_game_room', {
+        p_room_id: leavingRoomId
+      });
+      leaveError = res?.error || null;
+    } catch (e) {
+      leaveError = e;
+    }
+
+    if (leaveError) {
+      showError(force ? 'Cannot change table' : 'Cannot leave table', leaveError);
+      return false;
+    }
 
     if (online.subscription) {
       await db.removeChannel(online.subscription);
@@ -2246,10 +2305,12 @@
     online.arrangement321 = [1,2,3,4,5,6];
     online.sitgoTournamentId = null;
     online.sitgoState = null;
+    return true;
   }
 
 
   // =============================================================
+  // V14.0 — CORE CLASSIC 3 PATTI + ANYTIME TABLE SWITCH
   // V10.0 — 1000 TABLE NETWORK
   // 10 modes x 100 logical tables. Physical rooms are created lazily.
   // =============================================================
@@ -2384,9 +2445,10 @@
       const filtered = tables.filter(t => String(t.tier || '').toUpperCase() === activeTier);
       overlay.querySelector('#tpaMetaBody').innerHTML = `
         <div class="arena-net-summary">
-          <b>100 TABLES • ${modeTitle(mode).toUpperCase()}</b>
+          <b>${mode==='classic'?'3 PATTI • ':''}100 TABLES • ${modeTitle(mode).toUpperCase()}</b>
           <span>${synced ? 'LIVE NETWORK' : 'READY • SQL SYNC PENDING'}<br>10 MODES • 1000 TABLES</span>
         </div>
+        ${mode==='classic' ? `<div style="margin:-2px 0 10px;padding:9px 11px;border-radius:12px;background:rgba(255,255,255,.045);font-size:9px;line-height:1.45;opacity:.88"><b>CLASSIC 3 PATTI</b> • 3 cards • BLIND / SEEN / CHAAL / PACK / SHOW • Trail &gt; Pure Sequence &gt; Sequence &gt; Color &gt; Pair &gt; High Card</div>` : ''}
         <div class="arena-tier-tabs">
           ${tiers.map(t => `<button class="arena-tier-tab ${t===activeTier?'active':''}" data-arena-tier="${esc(t)}">${esc(t)}</button>`).join('')}
         </div>
@@ -2422,26 +2484,28 @@
     wireMetaFeatures();
 
     if ($q('#playNowBtn')) $q('#playNowBtn').onclick =
-      () => findOrCreatePublicRoom(100, 'Rookie Club', 'classic');
+      () => openArenaTableLobby('classic');
 
     document.querySelectorAll('.room-card').forEach(btn => {
-      btn.onclick = () => findOrCreatePublicRoom(
-        Number(btn.dataset.boot || 100),
-        btn.dataset.room || 'Teen Patti Table',
-        'classic'
-      );
+      // Classic 3 Patti now uses the same 100-table network as every variant.
+      btn.onclick = (event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        openArenaTableLobby('classic');
+      };
     });
 
     if ($q('#navTables')) $q('#navTables').onclick =
       () => openArenaTableLobby('classic');
 
     if ($q('#navPlay')) $q('#navPlay').onclick =
-      () => findOrCreatePublicRoom(100, 'Rookie Club', 'classic');
+      () => openArenaTableLobby('classic');
 
     if ($q('#privateBtn')) $q('#privateBtn').onclick = privateDialog;
 
     const modeWrap = $q('.mode-pills');
     const modes = [
+      ['3 Patti','classic','Classic 3 Patti',100],
       ['Muflis','muflis','Muflis Club',100],
       ['AK47','ak47','AK47 Club',100],
       ['Joker','joker','Joker Club',100],
@@ -2450,7 +2514,6 @@
       ['4X Boot','4xboot','4X Boot Club',400],
       ['6 Patti','6patti','6 Patti Tournament',500],
       ['321','321','321 Tournament',100],
-      ['Classic','classic','Rookie Club',100],
       ['Sit & Go','sitgo','Sit & Go',500]
     ];
 
