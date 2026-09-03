@@ -114,7 +114,9 @@
     sitgoState: null,
     refreshTimer: null,
     timerInterval: null,
-    deadlineMs: null
+    deadlineMs: null,
+    sideShow: null,
+    sideShowNoticeId: null
   };
   window.TPAOnline = online;
   window.TPAReconnect = () => reconnectExistingRoom();
@@ -215,6 +217,7 @@
     online.timerInterval = setInterval(async () => {
       if (!online.roomId) return;
       renderTurnTimer();
+      await expireSideShowIfNeeded();
       await forceTimeoutIfNeeded();
     }, 1000);
   }
@@ -1808,6 +1811,10 @@
         event: '*', schema: 'public', table: 'game_actions',
         filter: `room_id=eq.${online.roomId}`
       }, scheduleRefresh)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'side_show_requests',
+        filter: `room_id=eq.${online.roomId}`
+      }, scheduleRefresh)
       .subscribe();
   }
 
@@ -1870,25 +1877,32 @@
     online.currentRound = rounds?.[0] || null;
     online.myHand = null;
     online.actions = [];
+    online.sideShow = null;
 
     if (!online.currentRound) return;
 
     const roundId = online.currentRound.id;
 
-    const [handRes, actionRes] = await Promise.all([
+    const [handRes, actionRes, sideRes] = await Promise.all([
       db.from('player_hands')
         .select('user_id,cards,is_seen,is_folded,is_revealed,bet_amount,variant_choice')
         .eq('round_id', roundId),
       db.from('game_actions')
         .select('id,user_id,action,amount,created_at')
         .eq('round_id', roundId)
-        .order('id', { ascending: true })
+        .order('id', { ascending: true }),
+      db.from('side_show_requests')
+        .select('id,round_id,room_id,requester_id,target_id,status,amount,turn_seq,loser_id,created_at,expires_at,resolved_at')
+        .eq('round_id', roundId)
+        .order('created_at', { ascending: false })
+        .limit(1)
     ]);
 
     const visibleHands = handRes.data || [];
     online.myHand = visibleHands.find(h => h.user_id === online.user?.id) || null;
     online.visibleHands = visibleHands;
     online.actions = actionRes.data || [];
+    online.sideShow = sideRes?.data?.[0] || null;
   }
 
   function clearSeat(id) {
@@ -1918,6 +1932,171 @@
 
   function visibleHandFor(userId) {
     return (online.visibleHands || []).find(h => h.user_id === userId);
+  }
+
+  function playerName(userId) {
+    return online.players.find(p => p.user_id === userId)?.profile?.username || 'Player';
+  }
+
+  function activeSeenSideShowTarget() {
+    if (online.mode !== 'classic' || !online.user?.id || !online.myHand?.is_seen || online.myHand?.is_folded) return null;
+    const me = online.players.find(p => p.user_id === online.user.id);
+    if (!me) return null;
+    const candidates = online.players
+      .filter(p => p.user_id !== online.user.id)
+      .filter(p => {
+        const h = visibleHandFor(p.user_id);
+        return h && h.is_seen && !h.is_folded;
+      })
+      .sort((a,b) => Number(a.seat_no) - Number(b.seat_no));
+    if (!candidates.length) return null;
+    const before = candidates.filter(p => Number(p.seat_no) < Number(me.seat_no));
+    return before.length ? before[before.length - 1] : candidates[candidates.length - 1];
+  }
+
+  function ensureSideShowUI() {
+    const controls = $q('#tableScreen .controls');
+    if (!controls) return;
+
+    if (!$q('#tpaSideShowStyle')) {
+      const style = document.createElement('style');
+      style.id = 'tpaSideShowStyle';
+      style.textContent = `
+        #sideShowBtn{width:100%;margin-top:8px;padding:11px 10px;border-radius:13px;border:1px solid rgba(255,214,102,.55);background:linear-gradient(135deg,rgba(119,55,190,.92),rgba(214,143,34,.9));color:white;font-weight:1000;font-size:11px;letter-spacing:.35px;cursor:pointer;box-shadow:0 7px 20px rgba(0,0,0,.2)}
+        #sideShowBtn:disabled{opacity:.4;cursor:not-allowed}
+        #tpaSideShowPanel{display:none;margin-top:8px;padding:11px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(18,12,31,.94);box-shadow:0 8px 26px rgba(0,0,0,.28);color:#fff}
+        #tpaSideShowPanel.show{display:block}
+        #tpaSideShowPanel .ss-title{font-weight:1000;font-size:12px;color:#ffe29a}
+        #tpaSideShowPanel .ss-sub{font-size:10px;opacity:.8;margin-top:4px;line-height:1.4}
+        #tpaSideShowPanel .ss-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:9px}
+        #tpaSideShowPanel button{padding:10px;border:0;border-radius:11px;font-weight:1000;cursor:pointer}
+        #tpaSideShowAccept{background:#f3c866;color:#24162c} #tpaSideShowReject{background:rgba(255,255,255,.12);color:#fff}
+      `;
+      document.head.appendChild(style);
+    }
+
+    let btn = $q('#sideShowBtn');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'sideShowBtn';
+      btn.type = 'button';
+      btn.textContent = 'SIDE SHOW';
+      controls.appendChild(btn);
+    }
+
+    let panel = $q('#tpaSideShowPanel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'tpaSideShowPanel';
+      controls.appendChild(panel);
+    }
+  }
+
+  async function requestSideShow() {
+    const r = online.currentRound;
+    if (!r?.id) return;
+    const { error } = await db.rpc('request_side_show', { p_round_id: r.id });
+    if (error) return showError('Side Show unavailable', error);
+    await sleep(80);
+    await refreshAll();
+  }
+
+  async function respondSideShow(accept) {
+    const req = online.sideShow;
+    if (!req?.id) return;
+    const { data, error } = await db.rpc('respond_side_show', {
+      p_request_id: req.id,
+      p_accept: !!accept
+    });
+    if (error) return showError('Side Show response failed', error);
+    if (data?.status === 'accepted') {
+      if (data.loser_id === online.user?.id) roomMessage('Side Show accepted • Your hand lost • PACK');
+      else roomMessage('Side Show accepted • You win the comparison');
+    } else if (data?.status === 'rejected') {
+      roomMessage('Side Show rejected • Game continues');
+    }
+    await sleep(80);
+    await refreshAll();
+  }
+
+  async function expireSideShowIfNeeded() {
+    const req = online.sideShow;
+    const r = online.currentRound;
+    if (!req || req.status !== 'pending' || !r?.id || !req.expires_at) return;
+    const deadline = new Date(req.expires_at).getTime();
+    if (!Number.isFinite(deadline) || Date.now() < deadline) return;
+    try {
+      const { error } = await db.rpc('expire_side_show_request', { p_round_id: r.id });
+      if (error) {
+        const m = String(error.message || '').toLowerCase();
+        if (!m.includes('not expired') && !m.includes('no pending')) console.warn('Side Show expiry:', error.message);
+      }
+      await refreshAll();
+    } catch (e) {
+      console.warn('Side Show expiry failed:', e);
+    }
+  }
+
+  function renderSideShowState() {
+    ensureSideShowUI();
+    const btn = $q('#sideShowBtn');
+    const panel = $q('#tpaSideShowPanel');
+    if (!btn || !panel) return;
+
+    btn.style.display = 'none';
+    panel.classList.remove('show');
+    panel.innerHTML = '';
+
+    const r = online.currentRound;
+    const hand = online.myHand;
+    if (online.mode !== 'classic' || !r || r.status !== 'playing' || !hand || hand.is_folded) return;
+
+    const req = online.sideShow;
+    if (req?.status === 'pending') {
+      // Freeze ordinary action buttons while a Side Show decision is pending.
+      ['#packBtn','#seenBtn','#chaalBtn','#showBtn'].forEach(id => {
+        const b = $q(id);
+        if (b) { b.disabled = true; b.style.opacity = '.42'; }
+      });
+      const left = Math.max(0, Math.ceil((new Date(req.expires_at).getTime() - Date.now()) / 1000));
+      if (req.target_id === online.user?.id) {
+        panel.classList.add('show');
+        panel.innerHTML = `
+          <div class="ss-title">SIDE SHOW REQUEST • ${esc(playerName(req.requester_id))}</div>
+          <div class="ss-sub">Seen hand comparison • ${Number(req.amount || 0).toLocaleString()} chips already added to the pot • ${left}s</div>
+          <div class="ss-actions"><button id="tpaSideShowAccept">ACCEPT</button><button id="tpaSideShowReject">REJECT</button></div>`;
+        $q('#tpaSideShowAccept').onclick = () => respondSideShow(true);
+        $q('#tpaSideShowReject').onclick = () => respondSideShow(false);
+      } else if (req.requester_id === online.user?.id) {
+        panel.classList.add('show');
+        panel.innerHTML = `<div class="ss-title">SIDE SHOW SENT • ${esc(playerName(req.target_id))}</div><div class="ss-sub">Waiting for Accept / Reject • ${left}s</div>`;
+      } else {
+        panel.classList.add('show');
+        panel.innerHTML = `<div class="ss-title">SIDE SHOW IN PROGRESS</div><div class="ss-sub">${esc(playerName(req.requester_id))} ↔ ${esc(playerName(req.target_id))} • ${left}s</div>`;
+      }
+      return;
+    }
+
+    if (req && req.status !== 'pending' && req.id !== online.sideShowNoticeId) {
+      online.sideShowNoticeId = req.id;
+      if (req.status === 'accepted') {
+        if (req.loser_id === online.user?.id) roomMessage('Side Show • Your hand lost • PACK');
+        else if (req.requester_id === online.user?.id || req.target_id === online.user?.id) roomMessage('Side Show • Comparison complete');
+      } else if (req.status === 'rejected') roomMessage('Side Show rejected');
+      else if (req.status === 'expired') roomMessage('Side Show expired • Game continues');
+    }
+
+    const activeCount = (online.visibleHands || []).filter(h => !h.is_folded).length;
+    const myTurn = r.current_turn === online.user?.id;
+    const target = activeSeenSideShowTarget();
+    const canRequest = myTurn && hand.is_seen && activeCount >= 3 && !!target;
+    if (canRequest) {
+      const amount = Number(r.current_bet || online.boot || 0) * 2;
+      btn.style.display = '';
+      btn.disabled = false;
+      btn.textContent = `SIDE SHOW • ${playerName(target.user_id)} • ${amount.toLocaleString()}`;
+      btn.onclick = requestSideShow;
+    }
   }
 
   function renderPlayers() {
@@ -2030,6 +2209,9 @@
   }
 
   function showStartButton() {
+    ensureSideShowUI();
+    if ($q('#sideShowBtn')) $q('#sideShowBtn').style.display = 'none';
+    if ($q('#tpaSideShowPanel')) $q('#tpaSideShowPanel').classList.remove('show');
     const count = online.players.length;
     let required = online.mode === '6patti' ? 5 : 2;
     if (online.mode === 'sitgo') {
@@ -2064,6 +2246,7 @@
   }
 
   function showActionButtons(myTurn) {
+    ensureSideShowUI();
     const deal = $q('#dealBtn');
     const actions = $q('#actionBar');
     if (deal) deal.classList.add('hidden');
@@ -2121,6 +2304,9 @@
   }
 
   function showFinished(r) {
+    ensureSideShowUI();
+    if ($q('#sideShowBtn')) $q('#sideShowBtn').style.display = 'none';
+    if ($q('#tpaSideShowPanel')) $q('#tpaSideShowPanel').classList.remove('show');
     const deal = $q('#dealBtn');
     const actions = $q('#actionBar');
     if (actions) actions.classList.add('hidden');
@@ -2166,6 +2352,7 @@
     renderPlayers();
     renderMyCards();
     renderRound();
+    renderSideShowState();
   }
 
   async function startRoundOnline() {
@@ -2264,6 +2451,7 @@
     };
 
     ensureChangeTableButton();
+    ensureSideShowUI();
   }
 
   async function leaveOnlineRoom(options = {}) {
@@ -2302,6 +2490,8 @@
     online.currentRound = null;
     online.myHand = null;
     online.actions = [];
+    online.sideShow = null;
+    online.sideShowNoticeId = null;
     online.arrangement321 = [1,2,3,4,5,6];
     online.sitgoTournamentId = null;
     online.sitgoState = null;
