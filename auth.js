@@ -226,14 +226,9 @@
     // has not created a profile yet.
     const username = preferredUserName(user);
     try {
-      const { data, error } = await db
-        .from('profiles')
-        .upsert(
-          { id: user.id, username },
-          { onConflict: 'id' }
-        )
-        .select('id,username,chips,games_played,games_won')
-        .maybeSingle();
+      const { data, error } = await db.rpc('ensure_player_profile', {
+        p_username: username
+      });
 
       if (!error && data) return data;
     } catch (_) {}
@@ -310,7 +305,8 @@
 
     const name = profile?.username || preferredUserName(user);
     const guestTag = user?.is_anonymous ? '<em class="guest-tag">GUEST</em>' : '';
-    pill.innerHTML = `<i></i><span>${name}</span>${guestTag}<button id="tpaLogoutBtn">LOGOUT</button>`;
+    pill.innerHTML = `<i></i><span></span>${guestTag}<button id="tpaLogoutBtn">LOGOUT</button>`;
+    pill.querySelector('span').textContent = name;
 
     const meName = document.querySelector('#me .pname');
     const meAvatar = document.querySelector('#me .avatar');
