@@ -28,3 +28,9 @@ reward/admin functions and production triggers still need integration testing.
 Before deployment: recompare the current server function, run full-schema
 integration tests in an isolated environment, review security advisors, generate
 a migration with the Supabase CLI, and obtain explicit live-change approval.
+
+`hand-privacy.sql` removes direct access to cards and 321 arrangement data and
+adds the authenticated `get_round_hands` reader used by `rooms.js`. Blind cards
+stay on the server; a player's own cards appear after Seen (or immediately for
+321 arrangement), and opponent cards appear only when revealed. Inactive users
+and guests are rejected. Realtime status fields retain explicit SELECT access.

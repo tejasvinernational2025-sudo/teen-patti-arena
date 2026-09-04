@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 31777)
+Total output lines: 3029
+
 
 (() => {
   // ==========================================================
@@ -1358,174 +1361,7 @@
     }
     el.querySelector('#tpaAccessTitle').textContent = title;
     el.querySelector('#tpaAccessMessage').textContent = message;
-    el.querySelector('#tpaAccessIcon').textContent = icon;
-    el.style.display = 'flex';
-  }
-
-  async function refreshLaunchControl() {
-    try {
-      const { data, error } = await db.rpc('get_launch_state');
-      if (error || !data) return;
-
-      const adminBtn = $q('#adminBtn');
-      if (adminBtn) adminBtn.style.display = data.is_admin ? '' : 'none';
-
-      if (data.banned && !data.is_admin) {
-        setAccessBlock(
-          true,
-          'Account restricted',
-          data.ban_reason || 'This account is temporarily restricted from gameplay.',
-          '⛔'
-        );
-        return;
-      }
-
-      if (data.maintenance && !data.is_admin) {
-        setAccessBlock(
-          true,
-          'Maintenance in progress',
-          data.maintenance_message || 'Teen Patti Arena is being updated. Please try again shortly.',
-          '🛠️'
-        );
-        return;
-      }
-
-      setAccessBlock(false);
-
-      if (data.announcement?.id) {
-        const key = `tpa_announcement_${data.announcement.id}`;
-        if (!sessionStorage.getItem(key)) {
-          sessionStorage.setItem(key, '1');
-          modal(
-            data.announcement.title || 'Announcement',
-            data.announcement.message || ''
-          );
-        }
-      }
-    } catch (_) {}
-  }
-
-  async function openAdminPanel() {
-    const overlay = showMeta('Admin • Launch Control', `<div class="tpa-sub">Loading admin dashboard…</div>`);
-    const { data, error } = await db.rpc('get_admin_dashboard');
-    if (error) {
-      overlay.querySelector('#tpaMetaBody').innerHTML = `<div class="tpa-sub">${esc(error.message)}</div>`;
-      return;
-    }
-
-    const d = data || {};
-    const reports = d.reports || [];
-    const rooms = d.rooms || [];
-    const flags = d.suspicious || [];
-    const stats = d.stats || {};
-
-    overlay.querySelector('#tpaMetaBody').innerHTML = `
-      <div class="tpa-admin-grid">
-        <div class="tpa-admin-card"><b>${Number(stats.users || 0)}</b><span>PLAYERS</span></div>
-        <div class="tpa-admin-card"><b>${Number(stats.active_rooms || 0)}</b><span>ACTIVE ROOMS</span></div>
-        <div class="tpa-admin-card"><b>${Number(stats.pending_reports || 0)}</b><span>PENDING REPORTS</span></div>
-        <div class="tpa-admin-card"><b>${Number(stats.flagged_24h || 0)}</b><span>FLAGS • 24H</span></div>
-      </div>
-
-      <div class="tpa-feature-card">
-        <div class="tpa-feature-line">
-          <b>Maintenance Mode</b>
-          <span class="tpa-maintenance-tag">${d.maintenance ? 'ON' : 'OFF'}</span>
-        </div>
-        <div class="tpa-admin-toolbar">
-          <button class="tpa-small-action" id="tpaMaintenanceToggle">${d.maintenance ? 'TURN OFF' : 'TURN ON'}</button>
-          <button class="tpa-small-action alt" id="tpaPublishAnnouncement">ANNOUNCEMENT</button>
-          <button class="tpa-small-action alt" id="tpaClearAnnouncement">CLEAR NOTICE</button>
-          <button class="tpa-small-action alt" id="tpaRefreshAdmin">REFRESH</button>
-        </div>
-      </div>
-
-      <div class="tpa-feature-card">
-        <h3>User Controls</h3>
-        <div class="tpa-sub">Ban/unban gameplay, social-mute/unmute, or grant virtual chips with an audit log.</div>
-        <div class="tpa-admin-toolbar">
-          <button class="tpa-small-action" id="tpaBanUser">BAN USER</button>
-          <button class="tpa-small-action alt" id="tpaUnbanUser">UNBAN</button>
-          <button class="tpa-small-action alt" id="tpaMuteUser">MUTE</button>
-          <button class="tpa-small-action alt" id="tpaUnmuteUser">UNMUTE</button>
-          <button class="tpa-small-action" id="tpaGrantChips">GRANT CHIPS</button>
-        </div>
-      </div>
-
-      <h3 style="margin:18px 0 5px">Pending Reports</h3>
-      ${reports.map(r => `
-        <div class="tpa-notice unread">
-          <b>#${r.id} • ${esc(r.reported_username || 'Player')} • ${esc(String(r.category || '').toUpperCase())}</b>
-          <p>${esc(r.details || 'No details supplied.')}</p>
-          <div class="tpa-feature-line"><span>By ${esc(r.reporter_username || 'Player')}</span><span>${new Date(r.created_at).toLocaleString()}</span></div>
-          <div class="tpa-feature-actions">
-            <button class="tpa-small-action" data-report-resolve="${r.id}">RESOLVE</button>
-          </div>
-        </div>
-      `).join('') || '<div class="tpa-sub">No pending reports.</div>'}
-
-      <h3 style="margin:18px 0 5px">Room Monitor</h3>
-      ${rooms.map(r => `
-        <div class="tpa-admin-log">
-          <b>${esc(r.room_name || 'Room')} • ${esc(String(r.game_mode || 'classic').toUpperCase())}</b><br>
-          ${Number(r.players_count || 0)}/5 players • ${esc(String(r.status || 'open').toUpperCase())}
-          ${r.room_code ? ` • ${esc(r.room_code)}` : ''}
-        </div>
-      `).join('') || '<div class="tpa-sub">No recent rooms.</div>'}
-
-      <h3 style="margin:18px 0 5px">Suspicious Activity</h3>
-      ${flags.map(f => `
-        <div class="tpa-admin-log">
-          <b>${esc(f.username || 'Player')} • ${esc(String(f.event_type || '').toUpperCase())}</b><br>
-          ${esc(f.summary || '')}<br>
-          <small>${new Date(f.created_at).toLocaleString()} • severity ${Number(f.severity || 1)}</small>
-        </div>
-      `).join('') || '<div class="tpa-sub">No recent suspicious activity.</div>'}
-    `;
-
-    overlay.querySelector('#tpaRefreshAdmin').onclick = openAdminPanel;
-
-    overlay.querySelector('#tpaMaintenanceToggle').onclick = async () => {
-      const message = d.maintenance
-        ? ''
-        : (prompt('MAINTENANCE MESSAGE\\n\\nMessage players will see:', 'We are updating Teen Patti Arena. Please try again shortly.') || '');
-      const { error: e } = await db.rpc('admin_set_maintenance', {
-        p_enabled: !d.maintenance,
-        p_message: message
-      });
-      if (e) return showError('Admin action failed', e);
-      await refreshLaunchControl();
-      await openAdminPanel();
-    };
-
-    overlay.querySelector('#tpaPublishAnnouncement').onclick = async () => {
-      const title = prompt('ANNOUNCEMENT TITLE:');
-      if (!title) return;
-      const message = prompt('ANNOUNCEMENT MESSAGE:');
-      if (!message) return;
-      const { error: e } = await db.rpc('admin_publish_announcement', {
-        p_title: title.trim(),
-        p_message: message.trim(),
-        p_hours: 24
-      });
-      if (e) return showError('Announcement failed', e);
-      modal('Announcement published', 'Players will see it when they refresh/open the game.');
-      await openAdminPanel();
-    };
-
-    overlay.querySelector('#tpaClearAnnouncement').onclick = async () => {
-      const { error: e } = await db.rpc('admin_clear_announcements');
-      if (e) return showError('Admin action failed', e);
-      await openAdminPanel();
-    };
-
-    async function moderate(action) {
-      const username = prompt(`${action.toUpperCase()} USER\\n\\nExact username:`);
-      if (!username) return;
-      const reason = prompt('Reason:', action === 'ban' ? 'Policy / abuse review' : 'Social moderation') || '';
-      let hours = null;
-      if (action === 'ban' || action === 'mute') {
-        const raw = prompt('Duration in hours (blank = indefinite):', '24');
+    el.querySelector('#tpaAccessIcon').te…1777 tokens truncated…tion in hours (blank = indefinite):', '24');
         if (raw && !Number.isNaN(Number(raw))) hours = Number(raw);
       }
       const { data: result, error: e } = await db.rpc('admin_moderate_user', {
@@ -1884,9 +1720,7 @@
     const roundId = online.currentRound.id;
 
     const [handRes, actionRes, sideRes] = await Promise.all([
-      db.from('player_hands')
-        .select('user_id,cards,is_seen,is_folded,is_revealed,bet_amount,variant_choice')
-        .eq('round_id', roundId),
+      db.rpc('get_round_hands', { p_round_id: roundId }),
       db.from('game_actions')
         .select('id,user_id,action,amount,created_at')
         .eq('round_id', roundId)
@@ -1898,6 +1732,10 @@
         .limit(1)
     ]);
 
+    if (handRes.error) {
+      console.error('Cannot load safe hand state', handRes.error);
+      return;
+    }
     const visibleHands = handRes.data || [];
     online.myHand = visibleHands.find(h => h.user_id === online.user?.id) || null;
     online.visibleHands = visibleHands;
