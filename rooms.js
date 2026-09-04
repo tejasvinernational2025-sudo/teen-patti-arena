@@ -2326,8 +2326,9 @@
         else s.textContent = online.mode==='6patti' ? `WAITING • ${count}/5 PLAYERS` : online.mode==='sitgo' ? `WAITING • ${count}/${required} ACTIVE PLAYERS` : 'WAITING FOR PLAYER';
       }
       if (sm) sm.innerHTML=`BOOT <b id="dealBoot">${online.boot.toLocaleString()}</b>`;
-      deal.disabled=count<required;
-      deal.style.opacity=count<required?'.55':'1';
+      deal.disabled=count<required || !!online.startBusy;
+      deal.style.opacity=deal.disabled?'.55':'1';
+      if (online.startBusy && s) s.textContent = 'STARTING…';
     }
   }
 
@@ -2442,13 +2443,20 @@
   }
 
   async function startRoundOnline() {
-    if (!online.roomId) return;
-    const { error } = await db.rpc('start_online_round', {
-      p_room_id: online.roomId
-    });
-    if (error) return showError('Cannot start round', error);
-    await sleep(100);
-    await refreshAll();
+    if (!online.roomId || online.startBusy) return;
+    const roomId = online.roomId;
+    online.startBusy = true;
+    renderRound();
+    try {
+      const { error } = await db.rpc('start_online_round', { p_room_id: roomId });
+      if (error) throw error;
+      if (online.roomId === roomId) await refreshAll();
+    } catch (error) {
+      if (online.roomId === roomId) showError('Cannot start round', error);
+    } finally {
+      online.startBusy = false;
+      renderRound();
+    }
   }
 
   async function act(action) {
