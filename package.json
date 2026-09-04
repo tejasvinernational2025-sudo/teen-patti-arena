@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "start": "servor --reload"
+    "start": "servor --reload",
+    "test": "node --test tests/*.test.cjs"
   },
   "dependencies": {
     "servor": "^4.0.2"
