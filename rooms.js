@@ -2175,7 +2175,93 @@
     if ($q('#myStatus')) $q('#myStatus').textContent = st;
   }
 
+  function show321Controls() {
+    const round = online.currentRound;
+    const hand = online.myHand;
+    $q('#dealBtn')?.classList.add('hidden');
+    $q('#actionBar')?.classList.add('hidden');
+    let panel = $q('#tpa321Controls');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'tpa321Controls';
+      panel.style.cssText = 'position:relative;z-index:85;padding:10px;background:#201329;color:#fff;border-radius:12px;text-align:center;max-width:440px;margin:8px auto';
+      $q('#actionBar')?.insertAdjacentElement('afterend', panel);
+    }
+    panel.hidden = false;
+    if (online.arrangementRoundId !== round.id) {
+      online.arrangementRoundId = round.id;
+      online.arrangement321 = [1,2,3,4,5,6];
+      online.arrangementSelection = null;
+    }
+    const ready = !!hand?.variant_choice?.ready;
+    if ($q('#roundLabel')) $q('#roundLabel').textContent = ready ? '321 • WAITING FOR PLAYERS' : '321 • ARRANGE YOUR CARDS';
+    if (!hand || !Array.isArray(hand.cards) || hand.cards.length !== 6) {
+      panel.textContent = 'Waiting for your six cards…';
+      return;
+    }
+    if (ready) {
+      panel.textContent = 'Arrangement submitted. Waiting for other players.';
+      return;
+    }
+    panel.innerHTML = '<div>Tap two cards to swap. Groups: 3 cards · 2 cards · 1 card</div>';
+    const groups = document.createElement('div');
+    groups.style.cssText = 'display:flex;justify-content:center;gap:10px;margin:10px 0';
+    let offset = 0;
+    for (const size of [3,2,1]) {
+      const group = document.createElement('div');
+      group.style.cssText = 'display:flex;gap:3px;border-bottom:2px solid #e2b655;padding-bottom:6px';
+      for (let j = 0; j < size; j++) {
+        const position = offset + j;
+        const c = hand.cards[online.arrangement321[position] - 1];
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = `${c.r}${c.s}`;
+        button.setAttribute('aria-label', `Group of ${size}, card ${j + 1}: ${c.r}${c.s}. Tap to swap`);
+        button.setAttribute('aria-pressed', String(online.arrangementSelection === position));
+        button.style.cssText = `min-width:38px;min-height:44px;border-radius:6px;background:${online.arrangementSelection === position ? '#ffd36a' : '#fff'};color:#24102e;border:2px solid #d9a84d;font-weight:bold`;
+        button.disabled = !!online.arrangementBusy;
+        button.onclick = () => {
+          const selected = online.arrangementSelection;
+          if (selected == null) online.arrangementSelection = position;
+          else {
+            [online.arrangement321[selected], online.arrangement321[position]] = [online.arrangement321[position], online.arrangement321[selected]];
+            online.arrangementSelection = null;
+          }
+          show321Controls();
+        };
+        group.appendChild(button);
+      }
+      offset += size;
+      groups.appendChild(group);
+    }
+    panel.appendChild(groups);
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.textContent = online.arrangementBusy ? 'SUBMITTING…' : 'CONFIRM 3–2–1 ARRANGEMENT';
+    submit.style.cssText = 'padding:12px;border-radius:8px;background:#ffd36a;color:#24102e;font-weight:bold';
+    submit.disabled = !!online.arrangementBusy;
+    submit.onclick = async () => {
+      if (online.arrangementBusy || online.currentRound?.id !== round.id) return;
+      online.arrangementBusy = true;
+      show321Controls();
+      try {
+        const { error } = await db.rpc('submit_321_arrangement', {
+          p_round_id: round.id, p_order: [...online.arrangement321]
+        });
+        if (error) throw error;
+        await refreshAll();
+      } catch (error) {
+        showError('Cannot submit arrangement', error);
+      } finally {
+        online.arrangementBusy = false;
+        renderRound();
+      }
+    };
+    panel.appendChild(submit);
+  }
+
   function renderRound() {
+    if ($q('#tpa321Controls')) $q('#tpa321Controls').hidden = true;
     const r = online.currentRound;
     const count = online.players.length;
 
@@ -2278,7 +2364,7 @@
     }
 
     const hand = online.myHand;
-    const disabled = !myTurn || !hand || hand.is_folded;
+    const disabled = !myTurn || !hand || hand.is_folded || online.actionBusy || online.sideShow?.status === 'pending';
 
     ['#packBtn','#seenBtn','#chaalBtn','#showBtn'].forEach(id => {
       const b = $q(id);
@@ -2304,6 +2390,7 @@
   }
 
   function showFinished(r) {
+    showStartButton();
     ensureSideShowUI();
     if ($q('#sideShowBtn')) $q('#sideShowBtn').style.display = 'none';
     if ($q('#tpaSideShowPanel')) $q('#tpaSideShowPanel').classList.remove('show');
@@ -2312,10 +2399,9 @@
     if (actions) actions.classList.add('hidden');
     if (deal) {
       deal.classList.remove('hidden');
-      deal.disabled = online.players.length < 2;
       deal.style.opacity = deal.disabled ? '.55' : '1';
       const s = deal.querySelector('span');
-      if (s) s.textContent = 'START NEXT ROUND';
+      if (s && !deal.disabled) s.textContent = 'START NEXT ROUND';
     }
 
     const result = r.result || {};
@@ -2367,16 +2453,21 @@
 
   async function act(action) {
     const r = online.currentRound;
-    if (!r?.id) return;
-
-    const { error } = await db.rpc('take_online_action', {
-      p_round_id: r.id,
-      p_action: action
-    });
-
-    if (error) return showError('Action not allowed', error);
-    await sleep(80);
-    await refreshAll();
+    if (!r?.id || online.actionBusy) return;
+    online.actionBusy = true;
+    renderRound();
+    try {
+      const { error } = await db.rpc('take_online_action', {
+        p_round_id: r.id, p_action: action
+      });
+      if (error) throw error;
+      await refreshAll();
+    } catch (error) {
+      showError('Action not allowed', error);
+    } finally {
+      online.actionBusy = false;
+      renderRound();
+    }
   }
 
   function ensureChangeTableButton() {
